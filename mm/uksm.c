@@ -163,6 +163,8 @@ static int is_full_zero(const void *s1, size_t len)
 }
 
 #endif
+#elif defined(CONFIG_ARM)
+#include "uksm_arm.h"
 #else
 static int is_full_zero(const void *s1, size_t len)
 {
@@ -5429,6 +5431,68 @@ static struct attribute_group uksm_attr_group = {
 	.attrs = uksm_attrs,
 	.name = "uksm",
 };
+
+static ssize_t pages_volatile_show(struct kobject *kobj,
+				struct kobj_attribute *attr, char *buf)
+{
+	return sprintf(buf, "0\n");
+}
+UKSM_ATTR_RO(pages_volatile);
+
+static ssize_t pages_to_scan_show(struct kobject *kobj,
+				    struct kobj_attribute *attr, char *buf)
+{
+	unsigned long pages = (uksm_max_cpu_percentage *
+		jiffies_to_msecs(uksm_sleep_jiffies) / 100);
+	pages = pages * 10 * uksm_ema_task_pages / UKSM_PAGE_COUNT_DEFAULT;
+
+	return sprintf(buf, "%lu\n", pages);
+}
+
+static ssize_t pages_to_scan_store(struct kobject *kobj,
+				     struct kobj_attribute *attr,
+				     const char *buf, size_t count)
+{
+	unsigned long pages;
+	int err;
+
+	err = strict_strtoul(buf, 10, &pages);
+	if (err || pages > 1000000)
+		return -EINVAL;
+
+	pages = pages * 1000 / uksm_ema_task_pages;
+	pages = pages * UKSM_PAGE_COUNT_DEFAULT * 10 /
+		jiffies_to_usecs(uksm_sleep_jiffies);
+
+	if (pages > 100)
+		return -EINVAL;
+	if (pages > 75)
+		pages = 75;
+	if (!pages)
+		pages = 1;
+
+	uksm_max_cpu_percentage = pages;
+
+	return count;
+}
+UKSM_ATTR(pages_to_scan);
+
+static struct attribute *ksm_attrs[] = {
+	&sleep_millisecs_attr.attr,
+	&pages_to_scan_attr.attr,
+	&run_attr.attr,
+	&pages_shared_attr.attr,
+	&pages_sharing_attr.attr,
+	&pages_unshared_attr.attr,
+	&pages_volatile_attr.attr,
+	&full_scans_attr.attr,
+	NULL,
+};
+
+static struct attribute_group ksm_attr_group = {
+	.attrs = ksm_attrs,
+	.name = "ksm",
+};
 #endif /* CONFIG_SYSFS */
 
 static inline void init_scan_ladder(void)
@@ -5691,6 +5755,9 @@ static int __init uksm_init(void)
 		kthread_stop(uksm_thread);
 		goto out_free;
 	}
+	err = sysfs_create_group(mm_kobj, &ksm_attr_group);
+	if (err)
+		printk(KERN_ERR "uksm: register legacy sysfs failed\n");
 #else
 	uksm_run = UKSM_RUN_MERGE;	/* no way for user to start it */
 
